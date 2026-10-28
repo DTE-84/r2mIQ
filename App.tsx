@@ -241,8 +241,10 @@ const SoundwaveVisualizer: React.FC<{ active: boolean; accentColor?: string }> =
 // ---------- Main Application ----------
 export default function App() {
   const { width } = useWindowDimensions();
-  const isDesktop = width >= 1024;
-  const isTablet = width >= 720;
+  // Phone < 600 ≤ tablet < 1180 ≤ desktop (hero and studio side by side)
+  const isPhone = width < 600;
+  const isDesktop = width >= 1180;
+  const heroFontSize = isPhone ? Math.max(30, Math.min(40, Math.round(width * 0.088))) : 54;
 
   const [fontsLoaded] = useFonts({
     Inter_400Regular,
@@ -1082,7 +1084,7 @@ export default function App() {
       <View style={styles.ambientOrbIndigo} pointerEvents="none" />
 
       {/* ---------- Top Glass Navigation Bar ---------- */}
-      <View style={styles.navbar}>
+      <View style={[styles.navbar, isPhone && styles.navbarPhone]}>
         <View style={styles.navBrandRow}>
           <View style={styles.brandIconBox}>
             <MaterialCommunityIcons name="waveform" size={20} color="#00E5B0" />
@@ -1114,7 +1116,9 @@ export default function App() {
               color={planTier === 'free' ? '#7C83FF' : '#00E5B0'}
             />
             <Text style={styles.tierPillBtnText}>
-              {currentTierSpec.badge} • {currentTierSpec.priceLabel}
+              {isPhone
+                ? currentTierSpec.badge
+                : `${currentTierSpec.badge} • ${currentTierSpec.priceLabel}`}
             </Text>
           </Pressable>
 
@@ -1124,7 +1128,7 @@ export default function App() {
             onPress={() => setQueueModalVisible(true)}
           >
             <Feather name="list" size={14} color="#7C83FF" />
-            <Text style={styles.vaultTriggerText}>Queue</Text>
+            {!isPhone && <Text style={styles.vaultTriggerText}>Queue</Text>}
             <View style={[styles.vaultCountBadge, { backgroundColor: 'rgba(124,131,255,0.2)' }]}>
               <Text style={[styles.vaultCountBadgeText, { color: '#7C83FF' }]}>
                 {queuedDocs.length}
@@ -1141,7 +1145,7 @@ export default function App() {
             }}
           >
             <Feather name="database" size={14} color="#00E5B0" />
-            <Text style={styles.vaultTriggerText}>Vault</Text>
+            {!isPhone && <Text style={styles.vaultTriggerText}>Vault</Text>}
             <View style={styles.vaultCountBadge}>
               <Text style={styles.vaultCountBadgeText}>{documents.length}</Text>
             </View>
@@ -1152,9 +1156,11 @@ export default function App() {
             onPress={() => setAuthModalVisible(true)}
           >
             <GoogleGIcon size={18} />
-            <Text style={styles.navAuthText} numberOfLines={1}>
-              {user ? user.name : 'Sign in'}
-            </Text>
+            {!isPhone && (
+              <Text style={styles.navAuthText} numberOfLines={1}>
+                {user ? user.name : 'Sign in'}
+              </Text>
+            )}
           </Pressable>
         </View>
       </View>
@@ -1178,21 +1184,27 @@ export default function App() {
 
       <ScrollView
         style={styles.mainScroll}
-        contentContainerStyle={styles.mainScrollContent}
+        contentContainerStyle={[styles.mainScrollContent, isPhone && styles.mainScrollContentPhone]}
         showsVerticalScrollIndicator={false}
       >
         {/* ---------- HERO SECTION + LIVE STUDIO SPLIT ---------- */}
         <View style={[styles.heroWorkspaceGrid, isDesktop && styles.heroWorkspaceGridDesktop]}>
           {/* Left Column: Iconic Hero Typography & Google CTA */}
-          <View style={[styles.heroColumn, isDesktop && styles.heroColumnDesktop]}>
+          <View style={isDesktop && styles.heroColumnDesktop}>
             <View style={styles.eyebrowRow}>
-              <Text style={styles.eyebrowText}>R E A D .   S P E A K .   T R A N S C R I B E .</Text>
+              <Text style={[styles.eyebrowText, isPhone && styles.eyebrowTextPhone]}>
+                READ.  SPEAK.  TRANSCRIBE.
+              </Text>
             </View>
 
             <Text
               style={[
                 styles.heroHeadline,
-                !isTablet && styles.heroHeadlineMobile,
+                isPhone && {
+                  fontSize: heroFontSize,
+                  lineHeight: Math.round(heroFontSize * 1.15),
+                  letterSpacing: -1,
+                },
                 fontsLoaded && { fontFamily: 'Inter_700Bold' },
               ]}
             >
@@ -1203,6 +1215,7 @@ export default function App() {
             <Text
               style={[
                 styles.heroSubtitle,
+                isPhone && styles.heroSubtitlePhone,
                 fontsLoaded && { fontFamily: 'Inter_400Regular' },
               ]}
             >
@@ -1211,7 +1224,7 @@ export default function App() {
             </Text>
 
             {/* Primary CTA Row: Continue with Google + Upgrade / RunIQ Driver Mode */}
-            <View style={styles.heroCtaRow}>
+            <View style={[styles.heroCtaRow, isPhone && styles.heroCtaRowPhone]}>
               <Pressable
                 style={({ pressed }) => [
                   styles.googleHeroButton,
@@ -1240,7 +1253,7 @@ export default function App() {
             </View>
 
             {/* ---------- 3 INTERACTIVE FEATURE PILLAR CARDS ---------- */}
-            <View style={[styles.cardsGrid, !isTablet && styles.cardsGridMobile]}>
+            <View style={[styles.cardsGrid, width < 700 && styles.cardsGridMobile]}>
               {featureCards.map((card) => {
                 const isSelected = mode === card.key;
                 return (
@@ -1308,7 +1321,13 @@ export default function App() {
           </View>
 
           {/* Right / Bottom Column: Interactive Live Pocket Voice Studio Deck */}
-          <View style={[styles.studioDeckCard, isDesktop && styles.studioDeckCardDesktop]}>
+          <View
+            style={[
+              styles.studioDeckCard,
+              isPhone && styles.studioDeckCardPhone,
+              isDesktop && styles.studioDeckCardDesktop,
+            ]}
+          >
             {/* Daily Usage Quota Bar + RunIQ Driver Mode Toggle */}
             <View style={styles.quotaHeaderStrip}>
               <View style={{ flex: 1 }}>
@@ -1369,12 +1388,12 @@ export default function App() {
 
             {/* Studio Header with Mode Switcher Tabs & Live Soundwave */}
             <View style={styles.studioDeckHeader}>
-              <View style={styles.studioModeTabs}>
+              <View style={[styles.studioModeTabs, isPhone && styles.studioModeTabsPhone]}>
                 {(
                   [
-                    { key: 'read', label: 'Read Aloud', icon: 'volume-2' },
-                    { key: 'dictate', label: 'Live Dictation', icon: 'mic' },
-                    { key: 'transcribe', label: 'Audio to Text', icon: 'upload' },
+                    { key: 'read', label: 'Read Aloud', short: 'Read', icon: 'volume-2' },
+                    { key: 'dictate', label: 'Live Dictation', short: 'Dictate', icon: 'mic' },
+                    { key: 'transcribe', label: 'Audio to Text', short: 'Transcribe', icon: 'upload' },
                   ] as const
                 ).map((tab) => {
                   const active = mode === tab.key;
@@ -1382,7 +1401,11 @@ export default function App() {
                     <Pressable
                       key={tab.key}
                       onPress={() => handleSelectMode(tab.key)}
-                      style={[styles.studioTab, active && styles.studioTabActive]}
+                      style={[
+                        styles.studioTab,
+                        isPhone && styles.studioTabPhone,
+                        active && styles.studioTabActive,
+                      ]}
                     >
                       <Feather
                         name={tab.icon}
@@ -1395,7 +1418,7 @@ export default function App() {
                           active && styles.studioTabTextActive,
                         ]}
                       >
-                        {tab.label}
+                        {isPhone ? tab.short : tab.label}
                       </Text>
                     </Pressable>
                   );
@@ -1449,11 +1472,13 @@ export default function App() {
                 <Feather name="plus" size={14} color="#00E5B0" />
                 <Text style={styles.newDocIconBtnText}>New</Text>
               </Pressable>
-              <View style={styles.docMetricsPill}>
-                <Text style={styles.docMetricsText}>
-                  {metrics.words}w • {metrics.duration}
-                </Text>
-              </View>
+              {!isPhone && (
+                <View style={styles.docMetricsPill}>
+                  <Text style={styles.docMetricsText}>
+                    {metrics.words}w • {metrics.duration}
+                  </Text>
+                </View>
+              )}
             </View>
 
             {/* RunIQ Hands-Free Driver Mode Oversized Deck (when active) */}
@@ -1465,7 +1490,7 @@ export default function App() {
                     RUNIQ HANDS-FREE DRIVER CONSOLE ({queuedDocs.length} DISPATCHES IN QUEUE)
                   </Text>
                 </View>
-                <View style={styles.driverDeckBtnsRow}>
+                <View style={[styles.driverDeckBtnsRow, isPhone && { flexDirection: 'column' }]}>
                   <Pressable
                     style={styles.driverGiantBtnTeal}
                     onPress={() =>
@@ -1611,7 +1636,7 @@ export default function App() {
 
             {/* Primary Studio Action Controls */}
             <View style={styles.studioControlsFooter}>
-              <View style={styles.primaryTransportGroup}>
+              <View style={[styles.primaryTransportGroup, isPhone && styles.fullWidthGrowRow]}>
                 {/* Read Aloud Play / Stop */}
                 {speaking ? (
                   <Pressable
@@ -1663,7 +1688,7 @@ export default function App() {
               </View>
 
               {/* Document Save to Neon & Export Utilities */}
-              <View style={styles.utilityButtonsRow}>
+              <View style={[styles.utilityButtonsRow, isPhone && styles.fullWidthGrowRow]}>
                 <Pressable
                   style={[styles.utilBtn, styles.utilBtnNeon]}
                   onPress={() => handleSaveToVault(false)}
@@ -1703,7 +1728,7 @@ export default function App() {
         <View style={styles.bottomPwaBar}>
           <View style={styles.bottomPwaLeft}>
             <MaterialCommunityIcons name="waveform" size={16} color="#4A5568" />
-            <Text style={styles.bottomPwaText}>
+            <Text style={[styles.bottomPwaText, isPhone && { letterSpacing: 0.8 }]}>
               INSTALL ON YOUR PHONE FROM THE BROWSER MENU  •  {currentTierSpec.unitEconomicsNote.toUpperCase()}
             </Text>
           </View>
@@ -2197,6 +2222,7 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#05070B',
+    overflow: 'hidden',
   },
   ambientOrbTeal: {
     position: 'absolute',
@@ -2228,6 +2254,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(5, 7, 11, 0.85)',
     flexWrap: 'wrap',
     gap: 10,
+  },
+  navbarPhone: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   navBrandRow: {
     flexDirection: 'row',
@@ -2275,6 +2305,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
+    flexShrink: 1,
     gap: 8,
   },
   tierPillBtn: {
@@ -2394,6 +2425,11 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
+  mainScrollContentPhone: {
+    paddingHorizontal: 16,
+    paddingTop: 22,
+    paddingBottom: 28,
+  },
   heroWorkspaceGrid: {
     flexDirection: 'column',
     gap: 28,
@@ -2402,9 +2438,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 34,
-  },
-  heroColumn: {
-    flex: 1,
   },
   heroColumnDesktop: {
     flex: 1.05,
@@ -2416,7 +2449,11 @@ const styles = StyleSheet.create({
     color: '#00E5B0',
     fontSize: 12,
     fontWeight: '700',
-    letterSpacing: 2.4,
+    letterSpacing: 4.5,
+  },
+  eyebrowTextPhone: {
+    fontSize: 11,
+    letterSpacing: 3,
   },
   heroHeadline: {
     color: '#FFFFFF',
@@ -2425,10 +2462,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -1.5,
     marginBottom: 20,
-  },
-  heroHeadlineMobile: {
-    fontSize: 38,
-    lineHeight: 44,
   },
   heroHeadlineAccent: {
     color: '#7C83FF',
@@ -2440,6 +2473,11 @@ const styles = StyleSheet.create({
     maxWidth: 540,
     marginBottom: 28,
   },
+  heroSubtitlePhone: {
+    fontSize: 16,
+    lineHeight: 25,
+    marginBottom: 24,
+  },
   // ---------- Google Pill CTA ----------
   heroCtaRow: {
     flexDirection: 'row',
@@ -2447,6 +2485,12 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 14,
     marginBottom: 36,
+  },
+  heroCtaRowPhone: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 12,
+    marginBottom: 28,
   },
   googleHeroButton: {
     flexDirection: 'row',
@@ -2577,13 +2621,17 @@ const styles = StyleSheet.create({
   },
   // ---------- Right / Interactive Voice Studio Deck ----------
   studioDeckCard: {
-    flex: 1,
     backgroundColor: '#0A0D14',
     borderWidth: 1,
     borderColor: '#1B2333',
     borderRadius: 20,
     padding: 20,
     gap: 14,
+  },
+  studioDeckCardPhone: {
+    padding: 14,
+    borderRadius: 16,
+    gap: 12,
   },
   studioDeckCardDesktop: {
     flex: 0.98,
@@ -2592,6 +2640,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: 14,
     backgroundColor: '#0E131D',
     borderWidth: 1,
@@ -2603,6 +2652,9 @@ const styles = StyleSheet.create({
   quotaLabelRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    columnGap: 10,
+    rowGap: 2,
     marginBottom: 6,
   },
   quotaTitleText: {
@@ -2715,6 +2767,9 @@ const styles = StyleSheet.create({
     borderColor: '#151C28',
     gap: 4,
   },
+  studioModeTabsPhone: {
+    width: '100%',
+  },
   studioTab: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2722,6 +2777,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     paddingVertical: 7,
     borderRadius: 9,
+  },
+  studioTabPhone: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 9,
   },
   studioTabActive: {
     backgroundColor: '#121926',
@@ -2761,6 +2822,7 @@ const styles = StyleSheet.create({
   },
   docTitleInput: {
     flex: 1,
+    minWidth: 0,
     color: '#F8FAFC',
     fontSize: 15,
     fontWeight: '700',
@@ -2902,6 +2964,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: 10,
     maxWidth: 290,
+    flexShrink: 1,
   },
   voicePickerBtnText: {
     color: '#CBD5E1',
@@ -2963,6 +3026,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     flexWrap: 'wrap',
+    flexShrink: 1,
+  },
+  fullWidthGrowRow: {
+    width: '100%',
   },
   transportBtn: {
     flexDirection: 'row',
@@ -3006,6 +3073,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     flexWrap: 'wrap',
+    flexShrink: 1,
   },
   utilBtn: {
     flexDirection: 'row',
@@ -3043,12 +3111,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 1,
   },
   bottomPwaText: {
     color: '#4B5568',
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1.5,
+    flexShrink: 1,
   },
   bottomPwaRight: {
     flexDirection: 'row',
