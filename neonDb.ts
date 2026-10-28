@@ -1,5 +1,3 @@
-import { neon } from '@neondatabase/serverless';
-
 export type DocCategory = 'Read Aloud' | 'Live Dictation' | 'Audio Transcript';
 export type PlanTier = 'free' | 'pro' | 'runiq_bundle';
 
@@ -78,207 +76,146 @@ export interface GoogleUser {
   dailyCharsUsed?: number;
 }
 
-const connectionString = process.env.EXPO_PUBLIC_DATABASE_URL;
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE_URL || '';
 
-if (!connectionString) {
-  throw new Error('EXPO_PUBLIC_DATABASE_URL is not set. Add it to your .env file.');
+// Google ID token sent as a bearer token; the API derives the user's identity from it.
+let authToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
 }
 
-const sql = neon(connectionString);
+export interface IdTokenClaims {
+  sub: string;
+  email: string;
+  name?: string;
+  picture?: string;
+  nonce?: string;
+  exp: number;
+}
 
 /**
- * Fetch all saved documents from Neon Postgres (ordered by most recently updated)
+ * Read a Google ID token's claims for display and expiry checks. This does not
+ * verify the signature — the API does that on every request.
  */
-export async function fetchDocumentsFromNeon(
-  ownerEmail?: string
-): Promise<SavedDocument[]> {
-  const rows = ownerEmail
-    ? await sql`
-        SELECT
-          id,
-          title,
-          content,
-          category,
-          word_count,
-          duration_label,
-          owner_email,
-          in_queue,
-          queue_order,
-          updated_at
-        FROM r2miq_documents
-        WHERE owner_email = ${ownerEmail} OR owner_email IS NULL
-        ORDER BY updated_at DESC
-      `
-    : await sql`
-        SELECT
-          id,
-          title,
-          content,
-          category,
-          word_count,
-          duration_label,
-          owner_email,
-          in_queue,
-          queue_order,
-          updated_at
-        FROM r2miq_documents
-        ORDER BY updated_at DESC
-      `;
+export function decodeIdToken(token: string): IdTokenClaims | null {
+  try {
+    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = part + '='.repeat((4 - (part.length % 4)) % 4);
+    const json = decodeURIComponent(
+      Array.from(atob(padded), (c) => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')
+    );
+    return JSON.parse(json) as IdTokenClaims;
+  } catch {
+    return null;
+  }
+}
 
-  return (rows as Record<string, any>[]).map((r) => ({
-    id: String(r.id),
-    title: String(r.title),
-    content: String(r.content ?? ''),
-    category: (r.category as DocCategory) || 'Read Aloud',
-    wordCount: Number(r.word_count ?? 0),
-    durationLabel: r.duration_label ? String(r.duration_label) : '0:00',
-    ownerEmail: r.owner_email ? String(r.owner_email) : undefined,
-    inQueue: Boolean(r.in_queue),
-    queueOrder: Number(r.queue_order ?? 0),
-    updatedAt: r.updated_at
-      ? new Date(r.updated_at).toISOString()
-      : new Date().toISOString(),
-  }));
+export function isIdTokenExpired(token: string): boolean {
+  const claims = decodeIdToken(token);
+  return !claims || claims.exp * 1000 <= Date.now();
+}
+
+function apiFetch(path: string, init: { method: 'GET' | 'POST'; body?: unknown }) {
+  if (!authToken) {
+    return Promise.reject(new Error('Not signed in with Google'));
+  }
+  return fetch(`${API_BASE}${path}`, {
+    method: init.method,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${authToken}`,
+      ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+  });
 }
 
 /**
- * Upsert (insert or update) a voice transcript or text document in Neon Postgres
+ * Fetch the signed-in user's saved documents via the Vercel Function `/api/documents-list`
+ */
+export async function fetchDocumentsFromNeon(): Promise<SavedDocument[]> {
+  const res = await apiFetch('/api/documents-list', { method: 'GET' });
+  if (!res.ok) {
+    throw new Error(`API error (${res.status}) fetching documents`);
+  }
+  const data = await res.json();
+  return Array.isArray(data?.documents) ? data.documents : [];
+}
+
+/**
+ * Upsert (insert or update) a voice transcript or text document via `/api/documents-save`
  */
 export async function upsertDocumentInNeon(doc: SavedDocument): Promise<void> {
-  await sql`
-    INSERT INTO r2miq_documents (
-      id,
-      title,
-      content,
-      category,
-      word_count,
-      duration_label,
-      owner_email,
-      in_queue,
-      queue_order,
-      updated_at
-    )
-    VALUES (
-      ${doc.id},
-      ${doc.title},
-      ${doc.content},
-      ${doc.category},
-      ${doc.wordCount},
-      ${doc.durationLabel ?? '0:00'},
-      ${doc.ownerEmail ?? null},
-      ${doc.inQueue ?? false},
-      ${doc.queueOrder ?? 0},
-      NOW()
-    )
-    ON CONFLICT (id) DO UPDATE SET
-      title = EXCLUDED.title,
-      content = EXCLUDED.content,
-      category = EXCLUDED.category,
-      word_count = EXCLUDED.word_count,
-      duration_label = EXCLUDED.duration_label,
-      owner_email = COALESCE(EXCLUDED.owner_email, r2miq_documents.owner_email),
-      in_queue = EXCLUDED.in_queue,
-      queue_order = EXCLUDED.queue_order,
-      updated_at = NOW()
-  `;
+  const res = await apiFetch('/api/documents-save', { method: 'POST', body: doc });
+  if (!res.ok) {
+    throw new Error(`API error (${res.status}) saving document`);
+  }
 }
 
 /**
- * Toggle queue membership for a document in Neon Postgres
+ * Toggle queue membership for a document via `/api/documents-queue`
  */
 export async function toggleDocumentQueueInNeon(
   id: string,
   inQueue: boolean,
   queueOrder = 0
 ): Promise<void> {
-  await sql`
-    UPDATE r2miq_documents
-    SET in_queue = ${inQueue}, queue_order = ${queueOrder}, updated_at = NOW()
-    WHERE id = ${id}
-  `;
+  const res = await apiFetch('/api/documents-queue', {
+    method: 'POST',
+    body: { id, inQueue, queueOrder },
+  });
+  if (!res.ok) {
+    throw new Error(`API error (${res.status}) updating queue`);
+  }
 }
 
 /**
- * Delete a document from Neon Postgres by ID
+ * Delete a document by ID via `/api/documents-delete`
  */
 export async function deleteDocumentFromNeon(id: string): Promise<void> {
-  await sql`
-    DELETE FROM r2miq_documents
-    WHERE id = ${id}
-  `;
+  const res = await apiFetch('/api/documents-delete', { method: 'POST', body: { id } });
+  if (!res.ok) {
+    throw new Error(`API error (${res.status}) deleting document`);
+  }
 }
 
 /**
- * Upsert a signed-in Google user profile, tier, and daily usage into Neon Postgres
+ * Sync the signed-in user's profile and preferences via `/api/users-upsert`.
+ * The server derives identity from the ID token and returns the stored tier and usage.
  */
 export async function upsertUserInNeon(
-  user: GoogleUser,
   preferredVoice?: string,
   speechRate?: number
 ): Promise<{ planTier: PlanTier; dailyCharsUsed: number }> {
-  const rows = (await sql`
-    INSERT INTO r2miq_users (
-      id,
-      name,
-      email,
-      picture,
-      provider,
-      preferred_voice,
-      speech_rate,
-      plan_tier,
-      daily_chars_used,
-      daily_reset_date,
-      last_login_at
-    )
-    VALUES (
-      ${user.id},
-      ${user.name},
-      ${user.email},
-      ${user.picture ?? null},
-      ${user.provider},
-      ${preferredVoice ?? null},
-      ${speechRate ?? 1.0},
-      ${user.planTier ?? 'free'},
-      ${user.dailyCharsUsed ?? 0},
-      CURRENT_DATE,
-      NOW()
-    )
-    ON CONFLICT (email) DO UPDATE SET
-      name = EXCLUDED.name,
-      picture = COALESCE(EXCLUDED.picture, r2miq_users.picture),
-      provider = EXCLUDED.provider,
-      preferred_voice = COALESCE(EXCLUDED.preferred_voice, r2miq_users.preferred_voice),
-      speech_rate = COALESCE(EXCLUDED.speech_rate, r2miq_users.speech_rate),
-      daily_chars_used = CASE
-        WHEN r2miq_users.daily_reset_date < CURRENT_DATE THEN 0
-        ELSE r2miq_users.daily_chars_used
-      END,
-      daily_reset_date = CURRENT_DATE,
-      last_login_at = NOW()
-    RETURNING plan_tier, daily_chars_used
-  `) as Record<string, any>[];
-
-  const row = rows[0];
+  const res = await apiFetch('/api/users-upsert', {
+    method: 'POST',
+    body: { preferredVoice, speechRate },
+  });
+  if (!res.ok) {
+    throw new Error(`API error (${res.status}) upserting user`);
+  }
+  const data = await res.json();
   return {
-    planTier: (row?.plan_tier as PlanTier) || user.planTier || 'free',
-    dailyCharsUsed: Number(row?.daily_chars_used ?? 0),
+    planTier: (data?.planTier as PlanTier) || 'free',
+    dailyCharsUsed: Number(data?.dailyCharsUsed ?? 0),
   };
 }
 
 /**
- * Update a user's subscription tier or daily character consumption in Neon Postgres
+ * Add to today's character consumption via `/api/users-usage`. The server owns the
+ * running total and the plan tier; both are returned.
  */
-export async function updateUserTierAndUsageInNeon(
-  email: string,
-  planTier: PlanTier,
-  dailyCharsUsed: number
-): Promise<void> {
-  await sql`
-    UPDATE r2miq_users
-    SET
-      plan_tier = ${planTier},
-      daily_chars_used = ${dailyCharsUsed},
-      daily_reset_date = CURRENT_DATE
-    WHERE email = ${email}
-  `;
+export async function recordUsageInNeon(
+  charsToAdd: number
+): Promise<{ planTier: PlanTier; dailyCharsUsed: number }> {
+  const res = await apiFetch('/api/users-usage', { method: 'POST', body: { charsToAdd } });
+  if (!res.ok) {
+    throw new Error(`API error (${res.status}) recording usage`);
+  }
+  const data = await res.json();
+  return {
+    planTier: (data?.planTier as PlanTier) || 'free',
+    dailyCharsUsed: Number(data?.dailyCharsUsed ?? 0),
+  };
 }

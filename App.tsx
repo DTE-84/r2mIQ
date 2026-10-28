@@ -37,7 +37,10 @@ import {
   toggleDocumentQueueInNeon,
   deleteDocumentFromNeon,
   upsertUserInNeon,
-  updateUserTierAndUsageInNeon,
+  recordUsageInNeon,
+  setAuthToken,
+  decodeIdToken,
+  isIdTokenExpired,
 } from './neonDb';
 
 // ---------- Types ----------
@@ -98,6 +101,8 @@ const PREMIUM_NATURAL_VOICES: VoiceProfile[] = [
 const DOCS_STORAGE_KEY = 'r2miq_studio_docs_v3';
 const USER_STORAGE_KEY = 'r2miq_google_user_v3';
 const CLIENT_ID_STORAGE_KEY = 'r2miq_google_client_id_v3';
+const ID_TOKEN_STORAGE_KEY = 'r2miq_google_id_token_v3';
+const OAUTH_NONCE_STORAGE_KEY = 'r2miq_google_oauth_nonce_v3';
 const DAILY_USAGE_STORAGE_KEY = 'r2miq_daily_usage_v3';
 const TIER_STORAGE_KEY = 'r2miq_plan_tier_v3';
 
@@ -305,10 +310,10 @@ export default function App() {
   };
 
   // Load Documents from Neon Postgres
-  const refreshDocsFromNeon = async (ownerEmail?: string) => {
+  const refreshDocsFromNeon = async () => {
     setNeonStatus('syncing');
     try {
-      const remoteDocs = await fetchDocumentsFromNeon(ownerEmail);
+      const remoteDocs = await fetchDocumentsFromNeon();
       if (remoteDocs.length > 0) {
         setDocuments(remoteDocs);
         storageSet(DOCS_STORAGE_KEY, JSON.stringify(remoteDocs));
@@ -375,7 +380,15 @@ export default function App() {
       }
     }
 
-    refreshDocsFromNeon(parsedUser?.email);
+    // Only a signed-in Google session (unexpired ID token) syncs with the API
+    const savedIdToken = storageGet(ID_TOKEN_STORAGE_KEY);
+    if (savedIdToken && !isIdTokenExpired(savedIdToken)) {
+      setAuthToken(savedIdToken);
+    } else if (savedIdToken) {
+      storageRemove(ID_TOKEN_STORAGE_KEY);
+    }
+
+    refreshDocsFromNeon();
 
     const savedClientId = storageGet(CLIENT_ID_STORAGE_KEY);
     if (savedClientId) {
@@ -414,47 +427,47 @@ export default function App() {
       };
     }
 
-    // Check OAuth Redirect Hash (#access_token=...)
+    // Check OAuth Redirect Hash (#id_token=...)
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hash) {
       const params = new URLSearchParams(window.location.hash.substring(1));
-      const accessToken = params.get('access_token');
-      if (accessToken) {
+      const idToken = params.get('id_token');
+      if (idToken) {
         window.history.replaceState({}, document.title, window.location.pathname);
-        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        })
-          .then((res) => res.json())
-          .then(async (profile) => {
-            if (profile && profile.email) {
-              const googleProfile: GoogleUser = {
-                id: profile.sub || `g-${Date.now()}`,
-                name: profile.name || profile.email.split('@')[0],
-                email: profile.email,
-                picture: profile.picture,
-                provider: 'google-oauth',
-                planTier,
-                dailyCharsUsed,
-              };
+        const expectedNonce = storageGet(OAUTH_NONCE_STORAGE_KEY);
+        storageRemove(OAUTH_NONCE_STORAGE_KEY);
+        const claims = decodeIdToken(idToken);
+        if (!claims?.email || !expectedNonce || claims.nonce !== expectedNonce) {
+          setErrorMsg('Could not verify Google OAuth session token.');
+        } else {
+          const googleProfile: GoogleUser = {
+            id: claims.sub,
+            name: claims.name || claims.email.split('@')[0],
+            email: claims.email,
+            picture: claims.picture,
+            provider: 'google-oauth',
+          };
+          setAuthToken(idToken);
+          storageSet(ID_TOKEN_STORAGE_KEY, idToken);
+          (async () => {
+            setNeonStatus('syncing');
+            try {
+              // Tier and usage come back from the server; the client never sets them
+              const synced = await upsertUserInNeon(selectedVoiceId, speechRate);
+              const syncedProfile: GoogleUser = { ...googleProfile, ...synced };
+              setUser(syncedProfile);
+              storageSet(USER_STORAGE_KEY, JSON.stringify(syncedProfile));
+              setPlanTier(synced.planTier);
+              setDailyCharsUsed(synced.dailyCharsUsed);
+              await refreshDocsFromNeon();
+              showToast(`Connected to Google & Neon as ${googleProfile.email}`);
+            } catch {
               setUser(googleProfile);
               storageSet(USER_STORAGE_KEY, JSON.stringify(googleProfile));
-              try {
-                const synced = await upsertUserInNeon(
-                  googleProfile,
-                  selectedVoiceId,
-                  speechRate
-                );
-                setPlanTier(synced.planTier);
-                setDailyCharsUsed(synced.dailyCharsUsed);
-                await refreshDocsFromNeon(googleProfile.email);
-              } catch {
-                // Keep local session
-              }
-              showToast(`Connected to Google & Neon as ${googleProfile.email}`);
+              setNeonStatus('local-fallback');
+              showToast(`Signed in as ${googleProfile.email} (sync unavailable)`);
             }
-          })
-          .catch(() => {
-            setErrorMsg('Could not verify Google OAuth session token.');
-          });
+          })();
+        }
       }
     }
   }, []);
@@ -539,9 +552,10 @@ export default function App() {
 
     if (user?.email) {
       try {
-        await updateUserTierAndUsageInNeon(user.email, planTier, nextTotal);
+        const synced = await recordUsageInNeon(charsToAdd);
+        setDailyCharsUsed(synced.dailyCharsUsed);
       } catch {
-        // Ignore network hiccup
+        // Ignore network hiccup or local-only session
       }
     }
     return true;
@@ -561,15 +575,11 @@ export default function App() {
       setSelectedVoiceId(PREMIUM_NATURAL_VOICES[0].identifier);
     }
 
+    // Local only: the server's plan_tier changes only through a billing path
     if (user) {
       const updatedUser: GoogleUser = { ...user, planTier: nextTier };
       setUser(updatedUser);
       storageSet(USER_STORAGE_KEY, JSON.stringify(updatedUser));
-      try {
-        await updateUserTierAndUsageInNeon(user.email, nextTier, dailyCharsUsed);
-      } catch {
-        // Ignore
-      }
     }
 
     setPricingModalVisible(false);
@@ -974,22 +984,14 @@ export default function App() {
       planTier,
       dailyCharsUsed,
     };
+    // A typed-in profile has no Google ID token, so it stays on this device only
+    setAuthToken(null);
+    storageRemove(ID_TOKEN_STORAGE_KEY);
     setUser(nextUser);
     storageSet(USER_STORAGE_KEY, JSON.stringify(nextUser));
     setAuthModalVisible(false);
-
-    setNeonStatus('syncing');
-    try {
-      const synced = await upsertUserInNeon(nextUser, selectedVoiceId, speechRate);
-      setPlanTier(synced.planTier);
-      setDailyCharsUsed(synced.dailyCharsUsed);
-      await refreshDocsFromNeon(nextUser.email);
-      setNeonStatus('synced');
-      showToast(`Signed in & synced Neon Vault for ${nextUser.email}`);
-    } catch {
-      setNeonStatus('local-fallback');
-      showToast(`Signed in as ${nextUser.email}`);
-    }
+    setNeonStatus('local-fallback');
+    showToast(`Signed in locally as ${nextUser.email} — use Google OAuth to sync`);
   };
 
   const handleGoogleOAuthRedirect = () => {
@@ -1002,21 +1004,28 @@ export default function App() {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       const redirectUri = window.location.origin + window.location.pathname;
       const scope = encodeURIComponent('openid profile email');
+      const nonce = Array.from(window.crypto.getRandomValues(new Uint8Array(16)), (b) =>
+        b.toString(16).padStart(2, '0')
+      ).join('');
+      storageSet(OAUTH_NONCE_STORAGE_KEY, nonce);
       window.location.href =
         `https://accounts.google.com/o/oauth2/v2/auth` +
         `?client_id=${encodeURIComponent(trimmed)}` +
         `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-        `&response_type=token` +
+        `&response_type=id_token` +
         `&scope=${scope}` +
+        `&nonce=${nonce}` +
         `&prompt=select_account`;
     }
   };
 
   const handleSignOut = () => {
+    setAuthToken(null);
+    storageRemove(ID_TOKEN_STORAGE_KEY);
     setUser(null);
     storageRemove(USER_STORAGE_KEY);
     setAuthModalVisible(false);
-    refreshDocsFromNeon(undefined);
+    refreshDocsFromNeon();
     showToast('Signed out of Google session');
   };
 
@@ -1127,7 +1136,7 @@ export default function App() {
           <Pressable
             style={styles.vaultTriggerBtn}
             onPress={() => {
-              refreshDocsFromNeon(user?.email);
+              refreshDocsFromNeon();
               setVaultModalVisible(true);
             }}
           >
