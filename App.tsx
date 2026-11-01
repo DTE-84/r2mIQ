@@ -42,6 +42,7 @@ import {
   decodeIdToken,
   isIdTokenExpired,
 } from './neonDb';
+import { mergeTranscript, pendingInterim } from './transcriptMerge';
 
 // ---------- Types ----------
 type StudioMode = 'read' | 'dictate' | 'transcribe';
@@ -711,6 +712,10 @@ export default function App() {
   };
 
   // ---------- 2. Live Dictation (Speech-to-Text) ----------
+  // What this dictation session has committed so far, used to drop the repeated
+  // words Android recognizers resend in each final result
+  const dictationSessionRef = useRef('');
+
   const startRecording = async () => {
     setErrorMsg(null);
     if (speaking) handleStopSpeaking();
@@ -721,6 +726,7 @@ export default function App() {
         return;
       }
       setInterimTranscript('');
+      dictationSessionRef.current = '';
       ExpoSpeechRecognitionModule.start({
         lang: 'en-US',
         interimResults: true,
@@ -747,15 +753,17 @@ export default function App() {
     const spoken = e.results[0]?.transcript ?? '';
     if (e.isFinal) {
       setInterimTranscript('');
-      if (spoken.trim()) {
-        recordCharacterUsage(spoken.trim().length);
+      const { session, added } = mergeTranscript(dictationSessionRef.current, spoken);
+      dictationSessionRef.current = session;
+      if (added) {
+        recordCharacterUsage(added.length);
         setText((prev) => {
           const base = prev.trimEnd();
-          return base ? `${base} ${spoken.trim()}` : spoken.trim();
+          return base ? `${base} ${added}` : added;
         });
       }
     } else {
-      setInterimTranscript(spoken);
+      setInterimTranscript(pendingInterim(dictationSessionRef.current, spoken));
     }
   });
 
