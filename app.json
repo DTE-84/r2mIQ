@@ -5,13 +5,14 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
         "NSSpeechRecognitionUsageDescription": "Allow $(PRODUCT_NAME) to use speech recognition.",
         "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to use the microphone."
-      }
+      },
+      "bundleIdentifier": "com.dtesolutions.r2mIQ"
     },
     "android": {
       "adaptiveIcon": {
@@ -20,17 +21,19 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-
       "permissions": [
         "android.permission.RECORD_AUDIO"
       ],
       "package": "com.dtesolutions.r2mIQ"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
     },
     "plugins": [
-      "expo-speech-recognition"
-    ]
+      "expo-speech-recognition",
+      "expo-router"
+    ],
+    "scheme": "r2miq"
   }
 }
