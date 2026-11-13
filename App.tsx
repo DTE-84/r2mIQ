@@ -14,6 +14,7 @@ import {
   StatusBar,
 } from 'react-native';
 import * as Speech from 'expo-speech';
+import * as Clipboard from 'expo-clipboard';
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -26,6 +27,12 @@ import {
   Inter_700Bold,
 } from '@expo-google-fonts/inter';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import {
+  applyFinalResult,
+  cleanSpoken,
+  newDictationSession,
+  type DictationSession,
+} from './lib/transcript';
 
 // ---------- Types ----------
 type DocCategory = 'Voice Transcript' | 'Text Document' | 'Executive Brief';
@@ -239,12 +246,21 @@ export default function App() {
   const [documents, setDocuments] = useState<SavedDocument[]>(INITIAL_DOCS);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Latest document text, readable synchronously from speech event handlers
+  // (several results can arrive before React re-renders).
+  const textRef = useRef(text);
+  textRef.current = text;
+
   // Speech & Dictation State
   const [recording, setRecording] = useState<boolean>(false);
   const [speaking, setSpeaking] = useState<boolean>(false);
   const [speechRate, setSpeechRate] = useState<number>(1.0);
   const [speechPitch, setSpeechPitch] = useState<number>(1.0);
   const [continuousDictation, setContinuousDictation] = useState<boolean>(true);
+
+  // Bookkeeping for the active dictation session (see applyFinalResult).
+  const dictationRef = useRef<DictationSession>(newDictationSession());
+  const startingRef = useRef(false);
 
   // Status & Feedback
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -414,6 +430,9 @@ export default function App() {
 
   // ---------- Speech-to-Text (Dictation) ----------
   const startRecording = async () => {
+    // Ignore double taps: two overlapping sessions would write everything twice.
+    if (recording || startingRef.current) return;
+    startingRef.current = true;
     setErrorMsg(null);
     try {
       const { granted } = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
@@ -422,6 +441,7 @@ export default function App() {
         return;
       }
       setInterimTranscript('');
+      dictationRef.current = newDictationSession();
       ExpoSpeechRecognitionModule.start({
         lang: 'en-US',
         interimResults: true,
@@ -431,6 +451,8 @@ export default function App() {
       setDocCategory('Voice Transcript');
     } catch (err: any) {
       setErrorMsg(err?.message ?? 'Unable to initialize speech recognition in this browser.');
+    } finally {
+      startingRef.current = false;
     }
   };
 
@@ -444,18 +466,21 @@ export default function App() {
     setInterimTranscript('');
   };
 
+  // Engines re-send earlier speech inside "final" results, so merge before writing.
+  const commitFinalResult = (spoken: string) => {
+    const nextDoc = applyFinalResult(dictationRef.current, textRef.current, spoken);
+    if (nextDoc === textRef.current) return;
+    textRef.current = nextDoc;
+    setText(nextDoc);
+  };
+
   useSpeechRecognitionEvent('result', (e) => {
     const spoken = e.results[0]?.transcript ?? '';
     if (e.isFinal) {
       setInterimTranscript('');
-      if (spoken.trim()) {
-        setText((prev) => {
-          const trimmedPrev = prev.trimEnd();
-          return trimmedPrev ? `${trimmedPrev} ${spoken.trim()}` : spoken.trim();
-        });
-      }
+      commitFinalResult(spoken);
     } else {
-      setInterimTranscript(spoken);
+      setInterimTranscript(cleanSpoken(spoken));
     }
   });
 
@@ -622,14 +647,14 @@ export default function App() {
 
   const handleCopyClipboard = async () => {
     try {
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(text);
-        showToast('Copied transcript to clipboard');
-      } else {
-        showToast('Clipboard synced');
+      if (!text.trim()) {
+        showToast('Nothing to copy yet');
+        return;
       }
+      await Clipboard.setStringAsync(text);
+      showToast('Copied transcript to clipboard');
     } catch {
-      setErrorMsg('Clipboard access blocked by browser permissions.');
+      setErrorMsg('Could not copy to the clipboard. Long-press the text to copy it manually.');
     }
   };
 
